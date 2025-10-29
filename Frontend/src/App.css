@@ -1,0 +1,64 @@
+#root {
+  margin: 0 auto;
+  padding: 2rem;
+  text-align: center;
+}
+
+.form-card {
+	display: flex;
+	flex-direction: column;
+	gap: 1rem;
+	padding: 2.5rem 2rem; 
+	background: #5c5c5c;
+	border-radius: 0.75rem;
+	width: 40vw;               
+	box-shadow: 0 0.25rem 0.5rem rgba(0, 0, 0, 0.25);
+	box-sizing: border-box;
+	margin: 0 auto;
+}
+
+.form-card h1 {
+	font-size: 2.2rem;        /* slightly bigger title */
+	font-weight: bold;
+	text-align: center;
+	margin-bottom: 1.5rem;
+}
+
+.form-card input {
+	padding: 0.6rem;          /* slightly taller inputs */
+	font-size: 1rem;
+}
+
+.btn-glass {
+  background: rgba(255, 255, 255, 0.1); /* semi-transparent */
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-glass:hover {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(15px);
+}
+
+.side-div {
+  display: flex;
+  justify-content: space-between; /* push first button left, second button right */
+  align-items: center;
+  width: 100%; /* make sure container spans full width */
+}
+
+.side-div button {
+  padding: 0.5rem 1rem;
+  border-radius: 0.3rem;
+  border: none;
+  background: #646cff;
+  color: white;
+  cursor: pointer;
+  width:20%;
+}
+
