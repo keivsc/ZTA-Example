@@ -52,7 +52,7 @@ router.get('/email/:email', async (req, res) => {
     }
 
     try {
-        const user = await userDb.getOne(
+        const user = await userDb.get(
             'SELECT * FROM Users WHERE email = ?',
             [email]
         );
@@ -75,7 +75,7 @@ router.post('/register', async (req, res) => {
     }
 
     try {
-        const existingUser = await userDb.getOne(
+        const existingUser = await userDb.get(
             'SELECT * FROM Users WHERE email = ?',
             [email]
         );
@@ -161,7 +161,7 @@ router.get('/salt/:email', async (req, res)=>{
     return res.status(400).json({ error: "Missing Required Fields" });
   }
 
-  const salt = await userDb.getOne(
+  const salt = await userDb.get(
     'SELECT passwordSalt FROM Users WHERE email = ?',
     [email]
   );
@@ -177,11 +177,11 @@ router.post('/login', async (req, res)=>{
 
   const { email, passwordHash } = req.body;
 
-  if (!email || !passwordHash){
+  if (!email){
     return res.status(400).json({ error: "Missing Required Fields" });
   }
 
-  const authCheck = await userDb.getOne(
+  const authCheck = await userDb.get(
     'SELECT userId, publicKey, keySalt, keyIV, privateKey FROM Users where email = ? AND passwordHash = ?',
     [email, passwordHash]
   );
@@ -218,7 +218,7 @@ router.post('/challenge', async (req, res)=>{
     return res.status(400).json({ error: "Missing Required Fields." });
   }
 
-  const challengeCheck = await userDb.getOne(
+  const challengeCheck = await userDb.get(
     'SELECT * FROM UserChallenges WHERE userId = ? AND challengeText = ?',
     [userId, text]
   );
@@ -265,7 +265,7 @@ router.post('/TOTP', async (req, res)=>{
     return res.status(401).json({ error: "401 Unauthorized." });
   }
 
-  const TOTPRecord = await userDb.getOne(
+  const TOTPRecord = await userDb.get(
     'SELECT * FROM UserTOTP WHERE userId = ?',
     [userId]
   );

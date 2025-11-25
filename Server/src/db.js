@@ -16,33 +16,25 @@ class Database {
     });
   }
 
-  async get(sql, params = []) {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) {
-          logger.error('DB get error', err);
-          reject(err);
-        } else {
-          // Return empty object if no row found
-          resolve(row || {});
-        }
-      });
-    });
-  }
+async get(sql, params = [], options = {}) {
+  const { mapFn = (row) => row, returnEmptyObj = false } = options;
 
-  // Promise-based single row query
-  async getOne(sql, params = [], mapFn = (row) => row) {
-    return new Promise((resolve, reject) => {
-      this.db.get(sql, params, (err, row) => {
-        if (err) {
-          logger.error('DB getOne error', err);
-          reject(err);
+  return new Promise((resolve, reject) => {
+    this.db.get(sql, params, (err, row) => {
+      if (err) {
+        logger.error('DB get error', err);
+        reject(err);
+      } else {
+        if (!row) {
+          resolve(returnEmptyObj ? {} : null);
         } else {
-          resolve(row ? mapFn(row) : null);
+          resolve(mapFn(row));
         }
-      });
+      }
     });
-  }
+  });
+}
+
 
   // Promise-based multiple rows query
   async getAll(sql, params = [], mapFn = (row) => row) {

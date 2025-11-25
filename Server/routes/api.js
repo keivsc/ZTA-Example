@@ -29,7 +29,7 @@ router.use(async (req, res, next) => {
   }
 
   try {
-    const stored = await fingerprintDb.getOne(
+    const stored = await fingerprintDb.get(
       'SELECT deviceId FROM fingerprints WHERE fingerprintId = ?',
       [fingerprintId],
       row => row.deviceId
@@ -69,7 +69,7 @@ router.post('/fingerprint', async (req, res) => {
   }
 
   try {
-    const stored = await fingerprintDb.getOne(
+    const stored = await fingerprintDb.get(
       'SELECT deviceId FROM fingerprints WHERE fingerprintId = ?',
       [fingerprintId],
       row => row.deviceId

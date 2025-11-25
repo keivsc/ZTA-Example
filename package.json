@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@noble/ed25519": "^3.0.0",
+    "ua-parser-js": "^2.0.6"
+  }
+}

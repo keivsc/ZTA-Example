@@ -1,3 +1,7 @@
+
+import crypto from 'crypto';
+
+
 export function toPEM(base64Key) {
   // Decode from base64 back to binary
   const der = Buffer.from(base64Key, 'base64');
@@ -10,4 +14,11 @@ export function toPEM(base64Key) {
     `\n-----END PUBLIC KEY-----`;
 
   return pem;
+}
+
+export function randomString(length = 6) {th
+    return crypto.randomBytes(length)
+                 .toString('base64')
+                 .replace(/[^a-zA-Z0-9]/g, '') 
+                 .slice(0, length);
 }

@@ -78,21 +78,33 @@ export async function deriveKey(password: string, keySalt: string, keyIV: string
     };
 }
 
+export async function hashPassword(password: string, salt: Uint8Array<ArrayBuffer>) {
 
-export async function hashPassword(password: string, salt:Uint8Array<ArrayBuffer>): Promise<passwordHash>{
+    const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(password),
+        "PBKDF2",
+        false,
+        ["deriveBits"]
+    );
 
-    // Import PassKey
-    const passKey = await subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
-
-    // Derive Key
-    const derivedBits = await subtle.deriveBits({name: "PBKDF2", salt, iterations:200000, hash: "SHA-256"}, passKey, 256);
+    const derivedBits = await crypto.subtle.deriveBits(
+        {
+            name: "PBKDF2",
+            salt,
+            iterations: 310000,
+            hash: "SHA-256"
+        },
+        keyMaterial,
+        256
+    );
 
     return {
         hash: toBase64(new Uint8Array(derivedBits)),
-        salt: toBase64(new Uint8Array(salt))
-    }
-
+        salt: toBase64(salt)
+    };
 }
+
 
 
 export async function encryptPrivateKey(privateKey: CryptoKey, passphrase: CryptoKey, iv:Uint8Array): Promise<ArrayBuffer> {
