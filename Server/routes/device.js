@@ -66,7 +66,7 @@ router.post('/register', async(req, res)=>{
         await deviceDb.run(
         `INSERT INTO devices (deviceId, publicKey, dateCreated, lastUsed, IP)
         VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, publicKey, Date.now(), 0, req.ip]
+        [deviceId, publicKey, Date.now(), null, req.ip]
         );
     }else{
         if (userExists.dateCreated < (Date.now() + 30 * 24 * 3600000)){

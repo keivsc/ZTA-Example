@@ -1,4 +1,4 @@
-import { publicEncrypt, constants } from 'crypto';
+import { publicEncrypt, constants, pbkdf2 } from 'crypto';
 import { toPEM } from './utils.js';
 
 export function encryptKey(publicKey, wrapKey) {
@@ -10,4 +10,24 @@ export function encryptKey(publicKey, wrapKey) {
     },
     Buffer.from(wrapKey)
   ).toString('base64');
+}
+
+export function hashPassword(password, salt) {
+    return new Promise((resolve, reject) => {
+        pbkdf2(
+            password,
+            salt,
+            200000,
+            32,
+            "sha256",
+            (err, derivedKey) => {
+                if (err) return reject(err);
+
+                resolve({
+                    hash: derivedKey.toString("base64"),
+                    salt: Buffer.from(salt).toString("base64")
+                });
+            }
+        );
+    });
 }
