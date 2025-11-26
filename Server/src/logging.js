@@ -21,7 +21,7 @@ class Logger {
     const color = this.Colors[type] || this.Colors.INFO;
     const typeLabel = this.Types[type] || '[INFO] ';
     
-    console.log(`${color} [${this.filename}] | [${timestamp}] ${typeLabel}${message}${this.Colors.RESET}`);
+    console.log(`${color} [${timestamp}] | ${typeLabel}${message}${this.Colors.RESET}`);
   }
 
   info(message) {
