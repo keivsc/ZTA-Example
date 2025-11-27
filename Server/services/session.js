@@ -1,10 +1,10 @@
-import Database from './db.js';
-import Logger from './logging.js';
+import Database from '../src/db.js';
+import Logger from '../src/logging.js';
 import {randomBytes} from 'crypto';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken'
 
-dotenv.config();
+dotenv.config({quiet:true});
 
 const logger = new Logger('session');
 const sesDb = new Database("session.db");
@@ -60,7 +60,7 @@ export async function getToken(userId, deviceId){
 }
 
 
-export async function verifyToken(token, userId, deviceId){
+export async function verifyToken(token, deviceId){
 
     try {
         const tokenCheck = await sesDb.get(
@@ -70,7 +70,7 @@ export async function verifyToken(token, userId, deviceId){
         if (!tokenCheck){
             throw new Error();
         }
-        if (tokenCheck.trustScore < 80 || tokenCheck.userId !== userId || tokenCheck.deviceId !== deviceId){
+        if (tokenCheck.trustScore < 80 || tokenCheck.deviceId !== deviceId){
             throw new Error();
         }
         const decoded = jwt.verify(token, JWT_SECRET);
@@ -78,18 +78,19 @@ export async function verifyToken(token, userId, deviceId){
                                 .update(JSON.stringify(decoded.payload))
                                 .digest('hex');
         if (decoded.hmac !== expectedHmac) throw new Error();
+        if (decoded.payload.userId !== tokenCheck.userId) throw new Error();
     } catch (_) {
         await sesDb.run(`DELETE FROM sessions WHERE token = ?`, [token]);
         return false;
     }
 
-    return true;
+    return decoded.payload.userId;
 
 }
 
-export async function updateTrustScore(token, score){
+export async function updateTrustScore(token, deviceId, score){
 
-    const verified = await verifyToken(token);
+    const verified = await verifyToken(token, deviceId);
     if (!verified) return false;
 
     await sesDb.run(

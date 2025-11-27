@@ -9,9 +9,9 @@ class Database {
   constructor(name) {
     this.db = new sqlite.Database(`./database/${name}`, (err) => {
       if (err) {
-        logger.error('Could not connect to database', err);
+        logger.error(`Could not connect to database [${name}]`, err);
       } else {
-        logger.info('Connected to SQLite database');
+        logger.info(`Connected to SQLite database [${name}]`);
       }
     });
   }

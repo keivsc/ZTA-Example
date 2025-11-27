@@ -4,3 +4,4 @@
 
 # Environment files
 /server/.env
+/server/database

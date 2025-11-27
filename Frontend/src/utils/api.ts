@@ -1,3 +1,5 @@
+import { bufferToHex, hexToBuffer } from "./crypto";
+
 const apiURL = "http://localhost:3000";
 
 
@@ -24,8 +26,25 @@ export async function post(endpoint: string, data: any) {
 
 
 // Authentication Functions
-export async function postFingerprint(fingerprintId: string) {
-    return await post('/api/fingerprint', { 'x-fingerprint-id': fingerprintId });
+export async function registerDevice(publicKey:string, privateKey:CryptoKey){
+    const challengeRes = await post('/device/register', {publicKey});
+    const challengeJSON = await challengeRes.json();
+    const challengeId = challengeJSON.challengeId;
+    const challenge = challengeJSON.challenge;
+
+    const signedChallengeBuffer = await crypto.subtle.sign(
+        "Ed25519",
+        privateKey,
+        hexToBuffer(challenge)
+    )
+
+    const signedChallenge = bufferToHex(signedChallengeBuffer);
+
+    return await post('/device/verify', {challengeId, signedChallenge});
+}
+
+export async function checkDevice(){
+    return await get('/device/check');
 }
 
 export async function checkEmailExists(email: string) {

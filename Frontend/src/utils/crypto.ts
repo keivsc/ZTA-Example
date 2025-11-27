@@ -165,3 +165,36 @@ export async function decryptWrappedKeys(privateKey: CryptoKey, encryptedKey: st
 export async function decryptRSA(RSAPrivateKey: CryptoKey, data: string){
     return new TextDecoder().decode(await subtle.decrypt({ name: "RSA-OAEP" }, RSAPrivateKey, fromBase64(data)));
 }
+
+
+export async function generateDeviceKey() {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "Ed25519"
+    },
+    true,                 // extractable
+    ["sign", "verify"]    // usages
+  );
+
+  return keyPair;
+}
+export function bufferToHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export function hexToBuffer(hex: string): ArrayBuffer {
+  if (hex.length % 2 !== 0) {
+    throw new Error("Invalid hex string length");
+  }
+
+  const length = hex.length / 2;
+  const buffer = new Uint8Array(length);
+
+  for (let i = 0; i < length; i++) {
+    buffer[i] = parseInt(hex.substr(i * 2, 2), 16);
+  }
+
+  return buffer.buffer;
+}

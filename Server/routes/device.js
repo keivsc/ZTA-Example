@@ -2,8 +2,8 @@ import express from 'express';
 import Database from '../src/db.js';
 import { randomUUID, randomBytes } from 'crypto';
 import Logger from '../src/logging.js';
-import UAParser from 'ua-parser-js';
-import randomString from '../src/utils.js';
+import {UAParser} from 'ua-parser-js';
+import {randomString} from '../src/utils.js';
 import * as ed from '@noble/ed25519';
 
 const router = express.Router();
@@ -16,7 +16,7 @@ await deviceDb.run(`
   CREATE TABLE IF NOT EXISTS devices (
     deviceId TEXT PRIMARY KEY,
     publicKey TEXT,
-    dateCreated INTEGER,
+    createdAt INTEGER,
     lastUsed INTEGER,
     IP TEXT
   )
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS challenges (
     expiresAt INTEGER
 )
 `)
+
 
 router.use((req, res, next)=>{
 
@@ -46,7 +47,7 @@ router.use((req, res, next)=>{
 router.post('/register', async(req, res)=>{
 
     const {publicKey} = req.body;
-    let deviceId = req.headers['x-device-id'] || '';
+    let deviceId = req.cookies['x-device-id'] || '';
 
     if (!publicKey){
         return res.status(400).json({error:"Missing/mismatch body."})
@@ -56,7 +57,7 @@ router.post('/register', async(req, res)=>{
     const browser = uaResult.browser.name || 'UnknownBrowser';
 
     const userExists = await deviceDb.get(
-        `SELECT dateCreated, lastUsed FROM devices WHERE deviceId = ? LIMIT 1`,
+        `SELECT createdAt, lastUsed FROM devices WHERE deviceId = ? LIMIT 1`,
         [deviceId]
     )
 
@@ -64,12 +65,12 @@ router.post('/register', async(req, res)=>{
         deviceId = `${deviceType}-${browser}-${randomString()}`;
 
         await deviceDb.run(
-        `INSERT INTO devices (deviceId, publicKey, dateCreated, lastUsed, IP)
+        `INSERT INTO devices (deviceId, publicKey, createdAt, lastUsed, IP)
         VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, publicKey, Date.now(), null, req.ip]
+        [deviceId, publicKey, Date.now(), 0, req.ip]
         );
     }else{
-        if (userExists.dateCreated < (Date.now() + 30 * 24 * 3600000)){
+        if (userExists.createdAt < (Date.now() + 30 * 24 * 3600000)){
             await deviceDb.run(
                 `DELETE FROM devices WHERE deviceId = ?`,
                 [deviceId]
@@ -77,7 +78,7 @@ router.post('/register', async(req, res)=>{
             deviceId = `${deviceType}-${browser}-${randomString()}`;
 
             await deviceDb.run(
-            `INSERT INTO devices (deviceId, publicKey, dateCreated)
+            `INSERT INTO devices (deviceId, publicKey, createdAt)
             VALUES (?, ?, ?)`,
             [deviceId, publicKey, Date.now()]
             );
@@ -95,7 +96,7 @@ router.post('/register', async(req, res)=>{
 
     if(!userChallenge){
         challengeId = randomUUID();
-        unsignedChallenge = crypto.randomBytes(32).toString('hex');
+        unsignedChallenge = randomBytes(32).toString('hex');
         expiresAt = Date.now() + 30000;
         await deviceDb.run(
             `INSERT INTO challenges VALUES (?, ?, ?, ?)`,
@@ -114,7 +115,7 @@ router.post('/register', async(req, res)=>{
 
 router.post('/verify', async(req, res)=>{
     const {challengeId, signedChallenge} = req.body;
-    let deviceId = req.headers['x-device-id'] || '';
+    let deviceId = req.cookies['x-device-id'] || '';
     if (!challengeId || typeof signedChallenge !== 'string') {
         return res.status(400).json({ error: "Missing/mismatch body." });
     }
@@ -125,14 +126,14 @@ router.post('/verify', async(req, res)=>{
     );
 
     if (!userChallenges) {
-        return res.status(400).json({ error: "Invalid challenge." });
+        return res.status(401).json({ error: "Invalid challenge." });
     }
     if (userChallenges.expiresAt < Date.now()) {
         await deviceDb.run(
             `DELETE FROM challenges WHERE challengeId = ?`,
             [challengeId]
         );
-        return res.status(400).json({ error: "Expired challenge." });
+        return res.status(401).json({ error: "Expired challenge." });
     }
 
     const userDevice = await deviceDb.get(
@@ -141,7 +142,7 @@ router.post('/verify', async(req, res)=>{
     );
 
     if (!userDevice){
-        return res.status(400).json({error:"Invalid device."})
+        return res.status(401).json({error:"Invalid device."})
     }
 
     deviceId = userDevice.deviceId;
@@ -165,6 +166,37 @@ router.post('/verify', async(req, res)=>{
         [challengeId]
     );
 
+    res.cookie('x-device-id', deviceId, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: 60 * 60 * 1000
+    });
     return res.status(200).json({success: true, deviceId});
 
 });
+
+router.get('/check', async(req,res)=>{
+    const deviceId = req.cookies['x-device-id'];
+    if (!deviceId){
+        console.log(req.cookies)
+        return res.status(400).json({error:"Missing device id"});
+    }
+    const deviceCheck = await deviceDb.get(
+        `SELECT publicKey, createdAt FROM devices WHERE deviceId = ?`,
+        [deviceId]
+    );
+    if (!deviceCheck){
+        return res.status(400).json({error:"Device ID does not exist"});
+    }
+    if (deviceCheck.createdAt > (Date.now() + 30 * 24 * 3600000)){
+        await deviceDb.run(
+            `DELETE FROM devices WHERE deviceId = ?`,
+            [deviceId]
+        )
+        return res.status(400).json({error:"deviceId expired."})
+    }   
+    return res.status(200).json({success:true});
+})
+
+export default router;

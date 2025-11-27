@@ -6,25 +6,15 @@ import rateLimiter from 'express-rate-limit';
 import Logger from './src/logging.js';
 
 import userRoutes from './routes/user.js';
-import apiRoutes from './routes/api.js';
+import fileRoutes from './routes/file.js';
+import deviceRoutes from './routes/device.js';
 
-dotenv.config();
+
+dotenv.config({quiet:true});
 const logger = new Logger('main');
 
 const app = express();
 const PORT = 3000;
-
-const apiLimiter = rateLimiter({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: 'Too many requests, please try again later.',
-});
-
-const fingerprintLimiter = rateLimiter({
-  windowMs: 60 * 1000,
-  max: 5,
-  message: 'Too many fingerprint requests, please try again later.',
-});
 
 // Middleware setup
 app.use(cors({
@@ -35,13 +25,10 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 
-// Apply rate limiting
-app.use('/api/', apiLimiter);
-app.use('/api/fingerprint', fingerprintLimiter);
-
 // Routes
 app.use('/user', userRoutes);
-app.use('/api', apiRoutes);
+app.use('/file', fileRoutes);
+app.use('/device',deviceRoutes)
 
 
 // Start server

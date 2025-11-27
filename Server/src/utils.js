@@ -16,9 +16,41 @@ export function toPEM(base64Key) {
   return pem;
 }
 
-export function randomString(length = 6) {th
+export function randomString(length = 6) {
     return crypto.randomBytes(length)
                  .toString('base64')
                  .replace(/[^a-zA-Z0-9]/g, '') 
                  .slice(0, length);
+}
+
+export function getFileType(filename) {
+  const parts = filename.split('.');
+  if (parts.length > 1) {
+    return '.' + parts.pop();
+  } else {
+    return '.txt';
+  }
+}
+
+
+export function fileToBlob(content) {
+  const maxSize = 5 * 1024 * 1024; // 5 MB 
+
+  let buffer;
+  if (typeof content === 'string') {
+    buffer = Buffer.from(content, 'utf-8');
+  } else if (content instanceof Uint8Array) {
+    buffer = Buffer.from(content);
+  } else if (Buffer.isBuffer(content)) {
+    buffer = content;
+  } else {
+    throw new Error('Unsupported file content type');
+  }
+
+  if (buffer.length > maxSize) {
+    throw new Error('File exceeds 5 MB limit');
+  }
+
+  const blob = new Blob([buffer]);
+  return blob;
 }
