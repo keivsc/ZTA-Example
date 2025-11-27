@@ -17,8 +17,7 @@ await deviceDb.run(`
     deviceId TEXT PRIMARY KEY,
     publicKey TEXT,
     createdAt INTEGER,
-    lastUsed INTEGER,
-    IP TEXT
+    lastUsed INTEGER
   )
 `);
 
@@ -45,7 +44,6 @@ router.use((req, res, next)=>{
 
 
 router.post('/register', async(req, res)=>{
-
     const {publicKey} = req.body;
     let deviceId = req.cookies['x-device-id'] || '';
 
@@ -65,9 +63,9 @@ router.post('/register', async(req, res)=>{
         deviceId = `${deviceType}-${browser}-${randomString()}`;
 
         await deviceDb.run(
-        `INSERT INTO devices (deviceId, publicKey, createdAt, lastUsed, IP)
-        VALUES (?, ?, ?, ?, ?)`,
-        [deviceId, publicKey, Date.now(), 0, req.ip]
+        `INSERT INTO devices (deviceId, publicKey, createdAt, lastUsed)
+        VALUES (?, ?, ?, ?)`,
+        [deviceId, publicKey, Date.now(), 0]
         );
     }else{
         if (userExists.createdAt < (Date.now() + 30 * 24 * 3600000)){
@@ -172,6 +170,7 @@ router.post('/verify', async(req, res)=>{
         sameSite: 'lax',
         maxAge: 60 * 60 * 1000
     });
+    console.log('new device registered')
     return res.status(200).json({success: true, deviceId});
 
 });
@@ -179,7 +178,6 @@ router.post('/verify', async(req, res)=>{
 router.get('/check', async(req,res)=>{
     const deviceId = req.cookies['x-device-id'];
     if (!deviceId){
-        console.log(req.cookies)
         return res.status(400).json({error:"Missing device id"});
     }
     const deviceCheck = await deviceDb.get(

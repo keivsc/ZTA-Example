@@ -33,7 +33,7 @@ export function SignUpForm({ onSubmit, redirect, message }: FormProps) {
       <input id="password" type="password" placeholder="Password" required />
       <p id="message" className="mt-4 text-center">{message}</p>
       <div className="side-div">
-        <button className="btn-glass" type="submit" onClick={redirect}>Login</button>
+        <button className="btn-glass" type="button" onClick={redirect}>Login</button>
         <button className="btn-glass" type="button" onClick={onSubmit}>Sign Up</button>
       </div>
       

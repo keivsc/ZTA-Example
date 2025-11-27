@@ -6,32 +6,55 @@ export interface DBItem<T = any> {
 export class LocalDB {
   private dbName: string;
   private version: number;
+  private dbCache: Map<string, IDBDatabase>; // cache per store
 
   constructor(dbName: string, version = 1) {
     this.dbName = dbName;
     this.version = version;
+    this.dbCache = new Map();
   }
 
-  private open(storeName: string): Promise<IDBDatabase> {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(this.dbName, this.version);
+  private async open(storeName: string): Promise<IDBDatabase> {
+    // Return cached DB if already opened for this store
+    if (this.dbCache.has(storeName)) {
+      return this.dbCache.get(storeName)!;
+    }
 
-      request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(storeName)) {
-          db.createObjectStore(storeName, { keyPath: 'id' });
+    while (true) {
+      try {
+        const db = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open(this.dbName, this.version);
+
+          request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+            const db = (event.target as IDBOpenDBRequest).result;
+            if (!db.objectStoreNames.contains(storeName)) {
+              db.createObjectStore(storeName, { keyPath: 'id' });
+            }
+          };
+
+          request.onsuccess = (event: Event) => {
+            resolve((event.target as IDBOpenDBRequest).result);
+          };
+
+          request.onerror = (event: Event) => {
+            reject((event.target as IDBOpenDBRequest).error);
+          };
+        });
+
+        if (db.objectStoreNames.contains(storeName)) {
+          // Cache DB for future calls
+          this.dbCache.set(storeName, db);
+          return db;
         }
-      };
 
-      request.onsuccess = (event: Event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        resolve(db);
-      };
-
-      request.onerror = (event: Event) => {
-        reject((event.target as IDBOpenDBRequest).error);
-      };
-    });
+        // If store missing, bump version and retry
+        db.close();
+        this.version++;
+      } catch (err) {
+        // If version conflict or other error, bump version and retry
+        this.version++;
+      }
+    }
   }
 
   async addItem<T>(storeName: string, item: DBItem<T>): Promise<void> {

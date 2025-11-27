@@ -1,6 +1,6 @@
 import express from 'express';
 import Database from '../src/db.js';
-import { createCipheriv, randomBytes, randomUUID, sign } from "crypto";
+import { createDecipheriv, createCipheriv, randomBytes, randomUUID, sign } from "crypto";
 import Logger from '../src/logging.js';
 import { toPEM } from '../src/utils.js'
 import { encryptKey, hashPassword } from '../src/crypto.js';
@@ -14,6 +14,10 @@ dotenv.config({quiet:true})
 
 const logger = new Logger('user')
 const userDb = new Database('user.db');
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCK_TIME = 15 * 60 * 1000; // 15 minutes
+
 
 await userDb.run(
     `CREATE TABLE IF NOT EXISTS users(
@@ -34,7 +38,8 @@ await userDb.run(
     `CREATE TABLE IF NOT EXISTS deviceKeys(
         deviceId TEXT PRIMARY KEY,
         userId TEXT,
-        publicKey TEXT,
+        signPublic TEXT,
+        encryptPublic TEXT,
         totpCheck BOOLEAN,
         createdAt INTEGER,
         lastUsed INTEGER
@@ -60,21 +65,27 @@ await userDb.run(
 )
 
 const router = express.Router();
+const AES_SECRET = Buffer.from(process.env.AES_SECRET, 'hex');
 
-router.use((req,res)=>{
+router.use((req, res, next)=>{
+
     const deviceId = req.cookies['x-device-id'];
     if (!deviceId){
         return res.status(400).json({error:"Missing device id."});
     }
-
+    next();
 })
 
-router.get('/register', async (req, res)=>{
+router.post('/register', async (req, res)=>{
     const {username, email, password} = req.body;
     
 
     if (!username || !email || !password ){
         return res.status(400).json({error:"Missing username, email or password."});
+    }
+
+    if (!emailRegex.test(email)){
+        return res.status(400).json({error:"Invalid email."});
     }
 
     const userExists = await userDb.get(
@@ -87,19 +98,21 @@ router.get('/register', async (req, res)=>{
     }
 
     const salt = randomBytes(32);
-    const passwordHash = hashPassword(password, salt);
+    const passwordHash = await hashPassword(password, salt);
     const totpSecret = speakeasy.generateSecret();
     const iv = randomBytes(12)
-    const totpCipher = createCipheriv('aes-256-gcm', env.AES_SECRET, iv);
-    const encryptedTotp = Buffer.concat([cipher.update(totpSecret.ascii, 'utf8'), cipher.final()]);
+    const totpCipher = createCipheriv('aes-256-gcm', AES_SECRET, iv);
+    const encryptedTotp = Buffer.concat([totpCipher.update(totpSecret.ascii, 'utf8'), totpCipher.final()]);
     const authTag = totpCipher.getAuthTag();
     const url = speakeasy.otpauthURL({secret:totpSecret.ascii, label:"ZTA Demo", algorithm:'sha512'})
 
     await userDb.run(
         `INSERT INTO users (userId, username, email, passwordHash, passwordSalt, TOTPSecretEnc, TOTPiv, TOTPTag)
         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-        [randomUUID(), username, email, passwordHash, salt.toString('hex'), encryptedTotp.toString('hex'), iv.toString('hex'), authTag.toString('hex')]
+        [randomUUID(), username, email, passwordHash.hash, salt.toString('hex'), encryptedTotp.toString('hex'), iv.toString('hex'), authTag.toString('hex')]
     );
+
+    logger.log(`New user registered: ${email}`);
 
     return res.status(200).json({success:true, otpauthURL:url});
 
@@ -110,8 +123,8 @@ router.post('/login', async(req, res)=>{
     const {email, password} = req.body;
     const deviceId = req.cookies['x-device-id'];
     let userId = null;
-    let totp = true;
     let keyCheck = false;
+    let totp = true;
 
     if (!email || !password){
         return res.status(400).send({error:"Missing email or password."});
@@ -125,43 +138,66 @@ router.post('/login', async(req, res)=>{
     );
     if (userDevice){
         userId = userDevice.userId;
+        totp = false;
         keyCheck = true;
-        totp=false;
     }
     
     if(!keyCheck){
-        const {publicKey} = req.body;
-        if (!publicKey){
+        const {signPublic, encryptPublic} = req.body;
+        if (!signPublic || !encryptPublic){
             return res.status(400).json({error:"Public Key missing."})
         }
-        const userSalt = await userDb.get(
-            `SELECT passwordSalt FROM users WHERE email=?`
-        )
-
-        if (!userSalt){
-            return res.status(400).json({error:"User does not exist."});
-        }
-
-        const passwordHash = await hashPassword(password, Buffer.from(userSalt.passwordSalt, "hex"));
-
-        const auth = await userDb.get(
-            `SELECT userId FROM users WHERE email = ? AND passwordHash = ?`,
-            [email, passwordHash.hash]
+        // Fetch user info including loginAttempts
+        const userRecord = await userDb.get(
+            `SELECT userId, passwordSalt, passwordHash, loginAttempts, lastLoginAttempt 
+            FROM users WHERE email = ?`,
+            [email]
         );
 
-        if(!auth){
-            return res.status(400).json({error:"Email or password mismatch."})
+        if (!userRecord) {
+            return res.status(400).json({ error: "User does not exist." });
         }
 
-        userId = auth.userId;
+        // Check lockout
+        if (userRecord.loginAttempts >= MAX_LOGIN_ATTEMPTS) {
+            const now = Date.now();
+            if (userRecord.lastLoginAttempt && (now - userRecord.lastLoginAttempt) < LOCK_TIME) {
+                const remaining = Math.ceil((LOCK_TIME - (now - userRecord.lastLoginAttempt)) / 1000);
+                logger.warn(`Failed login attempt for email: ${email}, deviceId: ${deviceId}`);
+                return res.status(429).json({ error: `Account locked. Try again in ${remaining} seconds.` });
+            } else {
+                // Reset login attempts after lock period
+                await userDb.run(
+                    `UPDATE users SET loginAttempts = 0 WHERE userId = ?`,
+                    [userRecord.userId]
+                );
+            }
+        }
 
+        // Verify password
+        const passwordHash = await hashPassword(password, Buffer.from(userRecord.passwordSalt, "hex"));
+        if (passwordHash.hash !== userRecord.passwordHash) {
+            // Increment login attempts
+            await userDb.run(
+                `UPDATE users SET loginAttempts = loginAttempts + 1, lastLoginAttempt = ? WHERE email = ?`,
+                [Date.now(), email]
+            );
+            return res.status(400).json({ error: "Email or password mismatch." });
+        }
+
+        userId = userRecord.userId;
         await userDb.run(
-            `INSERT INTO deviceKeys(deviceId, userId, publicKey, totpCheck createdAt, lastUsed)
-            VALUES(?,?,?,?,?,?)`,
-            [deviceId, userId, publicKey, totp, Date.now(), null]
+            `UPDATE users SET loginAttempts = 0, lastLoginAttempt = ? WHERE userId = ?`,
+            [Date.now(), userRecord.userId]
         );
-        
+        await userDb.run(
+            `INSERT INTO deviceKeys(deviceId, userId, signPublic, encryptPublic, totpCheck, createdAt, lastUsed)
+            VALUES(?, ?, ?, ?, ?, ?, ?)`,
+            [deviceId, userId, signPublic, encryptPublic, totp, Date.now(), null]
+        );
     }
+
+
 
     if (!userId){
         return res.status(500).json({error:"Internal server error."});
@@ -171,6 +207,14 @@ router.post('/login', async(req, res)=>{
     const challenge = randomBytes(16).toString('hex');
     const expiresAt = Date.now() + 30_000;
 
+    const authChallenge = await userDb.get(
+        `SELECT challenge, nonce FROM authChallenges WHERE deviceId = ?`,
+        [deviceId]
+    );
+    if (authChallenge){
+        return res.status(200).json({nonce:authChallenge.nonce, challenge:authChallenge.challenge});
+    }
+
     await userDb.run(
         `INSERT INTO authChallenges(deviceId, userId, challenge, nonce, expiresAt) 
         VALUES(?,?,?,?,?)`,
@@ -178,68 +222,89 @@ router.post('/login', async(req, res)=>{
     );
 
     return res.status(200).json({nonce, challenge});
-
 })
 
-router.post('/verify', async(req, res)=>{
-    const {signature, nonce} = req.body;
+router.post('/verify', async (req, res) => {
+    const { signature, nonce } = req.body;
     const deviceId = req.cookies['x-device-id'];
 
-    if (!signature || !nonce){
-        return res.status(400).json({error:"Missing signature or nonce."});
+    if (!signature || !nonce) {
+        return res.status(400).json({ error: "Missing signature or nonce." });
     }
 
-    const {publicKey, TOTPCheck} = await userDb.get(
-        `SELECT publicKey, TOTPCheck FROM deviceKeys WHERE deviceId = ?`,
+    const deviceKeys = await userDb.get(
+        `SELECT signPublic, TOTPCheck FROM deviceKeys WHERE deviceId = ?`,
         [deviceId]
     );
-    if(!publicKey){
-        return res.status(400).json({error:"Invalid device."})
+    
+    if (!deviceKeys) {
+        return res.status(400).json({ error: "Invalid device." });
     }
+    const { signPublic, TOTPCheck } = deviceKeys;
 
     const challengeCheck = await userDb.get(
         `SELECT userId, challenge, nonce, expiresAt FROM authChallenges WHERE deviceId = ?`,
         [deviceId]
     );
-    if(!challengeCheck){
-        return res.status(400).json({error:"Invalid challenge."});
+    if (!challengeCheck) {
+        return res.status(400).json({ error: "Invalid challenge." });
     }
 
-    const userId = challengeCheck.userId;
-    const challenge = challengeCheck.challenge;
-    const realNonce = challengeCheck.nonce;
-    const expiresAt = challengeCheck.expiresAt;
+    const { userId, challenge, nonce: realNonce, expiresAt } = challengeCheck;
 
-    if (expiresAt < Date.now()){
-        await userDb.run(
-            `DELETE FROM authChallenges WHERE deviceId = ?`,
-            [deviceId]
-        );
-        return res.status(400).json({error:"Challenge expired."})
+    if (expiresAt < Date.now()) {
+        await userDb.run(`DELETE FROM authChallenges WHERE deviceId = ?`, [deviceId]);
+        return res.status(419).json({ error: "Challenge expired." });
     }
 
-    if (nonce !== realNonce){
+    if (nonce !== realNonce) {
         logger.warn(`Possible replay attack, IP: ${req.ip}`);
-        return res.status(400).json({error:"Invalid verification."})
+        return res.status(400).json({ error: "Invalid verification." });
     }
 
-    const signatureBytes = Buffer.from(signature, 'hex');
-    const challengeBytes = Buffer.from(challenge, 'utf-8');
-
-    const validSignature = await ed.verifyAsync(signatureBytes, challengeBytes, publicKey);
-
-    if (!validSignature){
-        return res.status(400).json({error:"Invalid signature."})
-    }
-    const sessionToken = await getToken(userId, deviceId);
-    
-    if (!sessionToken || TOTPCheck){
-        await userDb.run(
-            `INSERT INTO totp (deviceId, userId, expiresAt)
-            VALUES(?,?,?,?)`,
-            [deviceId, userId, Date.now()+60000 * 5]
+    try {
+        // Import the public key for RSA-PSS
+        const publicKey = await crypto.subtle.importKey(
+            'spki',
+            Buffer.from(signPublic, 'hex'), // your DB hex
+            {
+                name: 'RSA-PSS',
+                hash: 'SHA-256',
+            },
+            true,
+            ['verify']
         );
-        return res.status(401).json({ error:"TOTP required.", userId });
+
+        const signatureBuffer = Buffer.from(signature, 'hex');
+        const challengeBuffer = Buffer.from(challenge, 'hex');
+
+        const validSignature = await crypto.subtle.verify(
+            {
+                name: 'RSA-PSS',
+                saltLength: 32,
+            },
+            publicKey,
+            signatureBuffer,
+            challengeBuffer
+        );
+
+        if (!validSignature) {
+            return res.status(400).json({ error: "Invalid signature." });
+        }
+
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ error: "Verification error." });
+    }
+
+    const sessionToken = await getToken(userId, deviceId, req.ip);
+
+    if (!sessionToken || TOTPCheck) {
+        await userDb.run(
+            `INSERT OR IGNORE INTO totp (deviceId, userId, expiresAt) VALUES (?, ?, ?)`,
+            [deviceId, userId, Date.now() + 5 * 60 * 1000]
+        );
+        return res.status(401).json({ error: "TOTP required.", userId, expiresAt:Date.now() + 5 * 60 * 1000});
     }
 
     res.cookie('session', sessionToken, {
@@ -249,9 +314,10 @@ router.post('/verify', async(req, res)=>{
         maxAge: 60 * 60 * 1000
     });
 
+    logger.log(`New session token for user: ${userId}`);
     return res.status(200).json({ success: true });
-    
-})
+});
+
 
 router.post('/totp',async (req,res)=>{
 
@@ -266,6 +332,7 @@ router.post('/totp',async (req,res)=>{
     );
 
     if(!totpValid){
+        logger.warn(`Invalid TOTP request for user: ${userId}, device: ${deviceId}`);
         return res.status(400).json({error:"Invalid TOTP request."})
     }
     if (totpValid.expiresAt < Date.now()){
@@ -276,19 +343,19 @@ router.post('/totp',async (req,res)=>{
         return res.status(400).json({error:"TOTP Request expired."})
     }
 
-    const {totpSecretEnc, totpIV, totpTag} = await userDb.get(
+    const {TOTPSecretEnc, TOTPiv, TOTPTag} = await userDb.get(
         `SELECT TOTPSecretEnc, TOTPiv, TOTPTag FROM users WHERE userId = ?`,
         [userId]
     );
 
-    if (!totpSecretEnc){
-        return res.status(400).json({error:"Invalid TOTP reqest."})
+    if (!TOTPSecretEnc){
+        return res.status(400).json({error:"Invalid TOTP request."})
     }
 
-    const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(env.AES_SECRET, 'hex'), Buffer.from(totpIV, 'hex'));
-    decipher.setAuthTag(Buffer.from(totpTag, 'hex'));
+    const decipher = createDecipheriv('aes-256-gcm', AES_SECRET, Buffer.from(TOTPiv, 'hex'));
+    decipher.setAuthTag(Buffer.from(TOTPTag, 'hex'));
     const decrypted = Buffer.concat([
-        decipher.update(Buffer.from(totpSecretEnc, 'hex')),
+        decipher.update(Buffer.from(TOTPSecretEnc, 'hex')),
         decipher.final()
     ]);
     const totpSecret = decrypted.toString('utf-8');
@@ -310,6 +377,7 @@ router.post('/totp',async (req,res)=>{
         sameSite: 'lax',
         maxAge: 60 * 60 * 1000
     });
+    logger.log(`New session token for user: ${userId}`);
     return res.status(200).json({success:true});
 
 })

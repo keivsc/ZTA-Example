@@ -1,13 +1,14 @@
 import { useNavigate } from "react-router-dom";
 import { navigateTo } from "../utils/navigate";
 import { useEffect, useState } from "react";
-import { getPasswordSalt, verifyChallenge, verifyHash, verifyTOTP } from "../utils/api";
-import { decryptRSA, deriveKey, fromBase64, hashPassword } from "../utils/crypto";
 import { LoginForm, SignUpForm } from "../components/ui";
+import { login as loginUser } from "../controllers/loginController";
+import { getDeviceKeys } from "../utils/crypto";
+import { verifyTOTP } from "../utils/api";
 
 interface TOTPInputProps{
-    userId: string;
     TOTPExpiry: number;
+    userId: string;
 }
 
 function Login(){
@@ -20,7 +21,7 @@ function Login(){
     const navigate = useNavigate();
 
     const signUpRedirect = () =>{
-        navigateTo(navigate, '/register')
+        navigateTo(navigate, '/register');
     }
 
     const loginButtonClicked = async ()=>{
@@ -29,33 +30,27 @@ function Login(){
 
         const email = (document.getElementById("email") as HTMLInputElement).value;
         const password = (document.getElementById("password") as HTMLInputElement).value;
+        const loginRes = await loginUser(email, password);
 
-        const passwordSalt = await (await getPasswordSalt(email)).json();
-        console.log(passwordSalt);
-        const saltBytes = fromBase64(passwordSalt.data.passwordSalt);
-        const hashedPassword = await hashPassword(password, saltBytes);
+        switch (loginRes.code) {
+          case 401:
+            setUserId(loginRes.userId);
+            setExpiresAt(loginRes.expiresAt);
+            setTOTPInput(true);
+            break;
 
+          case 200:
+            navigateTo(navigate, '/explorer');
+            break;
 
-        const challengeFetch = await verifyHash(email, hashedPassword.hash);
-        const challengeRecord = (await challengeFetch.json()).data;
-        console.log(challengeRecord);
-
-        const derivedKey = await deriveKey(password, challengeRecord.salt, challengeRecord.iv, challengeRecord.key)
-        if (derivedKey.rawPrivateKey){
-            const decryptedChallenge = await decryptRSA(derivedKey.rawPrivateKey, challengeRecord.challengeText)
-            const challengeResult = await verifyChallenge(challengeRecord.userId, decryptedChallenge);
-            const challengeJson = await challengeResult.json();
-            if (challengeResult.status == 200){
-                setTOTPInput(true);
-                setUserId(challengeRecord.userId);
-                setExpiresAt(challengeJson.data.TOTPExpiry)
-            }
+          default:
+            setMessage(loginRes.message);
+            break;
         }
-
     }
 
-    if (showTOTPInput && userId && expiresAt) {
-        return <TOTPInput userId={userId} TOTPExpiry={expiresAt} />;
+    if (showTOTPInput && expiresAt && userId) {
+        return <TOTPInput TOTPExpiry={expiresAt} userId={userId}  />;
     }
 
 
@@ -65,11 +60,11 @@ function Login(){
     </div>);
 }
 
-export function TOTPInput({ userId, TOTPExpiry }: TOTPInputProps) {
+export function TOTPInput({ TOTPExpiry, userId }: TOTPInputProps) {
   const [timeLeft, setTimeLeft] = useState(0);
+  const navigate = useNavigate();
 
   useEffect(() => {
-
     const interval = setInterval(() => {
       const now = Date.now();
       const diff = Math.max(0, TOTPExpiry - now);
@@ -85,12 +80,12 @@ export function TOTPInput({ userId, TOTPExpiry }: TOTPInputProps) {
     return `${m}:${s.toString().padStart(2, "0")}`;
   };
 
-
   const verifyButtonClicked = async () => {
     const code = (document.getElementById("totp") as HTMLInputElement).value;
     const resTOTP = await verifyTOTP(userId, Number.parseInt(code));
     if (resTOTP.status === 200) {
-      console.log("COMPLETE!");
+      navigateTo(navigate, '/explorer');
+      return
     }
   };
 
@@ -119,6 +114,7 @@ export function TOTPInput({ userId, TOTPExpiry }: TOTPInputProps) {
     </div>
   );
 }
+
 
 
 export default Login;

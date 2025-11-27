@@ -1,32 +1,15 @@
+import { LocalDB } from "./localDB";
+
 const { subtle } = globalThis.crypto;
 
-interface GeneratedKey {
-    privateKey: string;
-    publicKey: string;
-    iv: string;
-    salt: string,
-    rawPrivateKey?: CryptoKey;
-}
 
 interface passwordHash {
     hash: string,
     salt: string
 }
 
-export async function generateKey(password:string) : Promise<GeneratedKey>{
-    
-    // Derive Passwords from password
-    const salt = crypto.getRandomValues(new Uint8Array(16))
-    const passwordKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"])
-    const kek = await crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
-        passwordKey,
-        { name: "AES-GCM", length: 256 },
-        true,
-        ["encrypt", "decrypt"]
-    );
+export async function generateEncryptionKeyPair() : Promise<CryptoKeyPair>{
 
-    // Generate RSA KeyPair
     const RSAParams = {
         name: "RSA-OAEP",
         modulusLength: 2048,
@@ -35,48 +18,27 @@ export async function generateKey(password:string) : Promise<GeneratedKey>{
     }
     const RSAKey = await subtle.generateKey(RSAParams, true, ["encrypt", "decrypt"]);
 
-    // Encrypt RSA Key
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    
-    const rawRSAPublicKey = await subtle.exportKey("spki", RSAKey.publicKey)
-    const encryptedRSAKey = await encryptPrivateKey(RSAKey.privateKey, kek, iv);
-
-    return {
-        privateKey: toBase64(new Uint8Array(encryptedRSAKey)),
-        publicKey: toBase64(new Uint8Array(rawRSAPublicKey)),
-        iv: toBase64(new Uint8Array(iv)),
-        salt: toBase64(new Uint8Array(salt)),
-        rawPrivateKey: RSAKey.privateKey
-    };
+    return RSAKey;
 }
 
-export async function deriveKey(password: string, keySalt: string, keyIV: string, encryptedPrivateKey: string): Promise<GeneratedKey>{
-    console.log("keySalt:", keySalt);
-    const salt = fromBase64(keySalt);
-    const iv = fromBase64(keyIV);
-    
+export async function generateSigningKeyPair(): Promise<CryptoKeyPair> {
+    const RSAParams = {
+        name: "RSA-PSS",               // Use "RSASSA-PKCS1-v1_5" if you prefer
+        modulusLength: 2048,           // Standard secure length
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256"                // Hash algorithm for signing
+    };
 
-
-    const passwordKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"])
-    const kek = await crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
-        passwordKey,
-        { name: "AES-GCM", length: 256 },
-        true,
-        ["encrypt", "decrypt"]
+    const RSAKey = await subtle.generateKey(
+        RSAParams,
+        true,                          // extractable
+        ["sign", "verify"]             // key usages for signing
     );
 
-    const encryptedBytes = Uint8Array.from(atob(encryptedPrivateKey), c => c.charCodeAt(0));
-    const rawPrivateKey = await decryptPrivateKey(encryptedBytes.buffer, kek, iv);
-
-    return {
-        privateKey: "",
-        publicKey: "",
-        salt: "",
-        iv: "",
-        rawPrivateKey: rawPrivateKey
-    };
+    return RSAKey;
 }
+
+
 
 export async function hashPassword(password: string, salt:Uint8Array<ArrayBuffer>): Promise<passwordHash>{
 
@@ -93,22 +55,6 @@ export async function hashPassword(password: string, salt:Uint8Array<ArrayBuffer
 
 }
 
-
-
-export async function encryptPrivateKey(privateKey: CryptoKey, passphrase: CryptoKey, iv:Uint8Array): Promise<ArrayBuffer> {
-    const rawRSAPrivateKey = await subtle.exportKey("pkcs8", privateKey);
-    const AESCBCParams = { name: 'AES-GCM', iv: iv };
-    const cipherText = await subtle.encrypt(AESCBCParams, passphrase, rawRSAPrivateKey);
-    return cipherText;
-}
-
-export async function decryptPrivateKey(encryptedKey: ArrayBuffer, passphrase: CryptoKey, iv: Uint8Array): Promise<CryptoKey> {
-    const AESCBCParams = { name: 'AES-GCM', iv: iv };
-    const decrypted = await subtle.decrypt(AESCBCParams, passphrase, encryptedKey);
-    const privateKey = await importPrivateKeyFromBuffer(decrypted);
-    return privateKey;
-}
-
 export function toBase64(uint8arr: Uint8Array) {
   let binary = '';
   const chunkSize = 0x8000; // 32KB chunks
@@ -122,29 +68,6 @@ export function fromBase64(base64: string) {
   return Uint8Array.from(atob(base64), c => c.charCodeAt(0));
 }
 
-export async function importPrivateKeyFromBuffer(privateKey: ArrayBuffer) : Promise<CryptoKey> {
-  return await crypto.subtle.importKey(
-    "pkcs8", privateKey,
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    true,
-    ["decrypt"]
-  );
-}
-
-export async function importPublicKeyFromBuffer(publicKey: ArrayBuffer) : Promise<CryptoKey>{
-  return await crypto.subtle.importKey(
-    "spki", publicKey,                  
-    {
-      name: "RSA-OAEP",
-      hash: "SHA-256",
-    },
-    true,
-    ["encrypt"]
-  );
-}
 
 export async function decryptWrappedKeys(privateKey: CryptoKey, encryptedKey: string): Promise<string> {
     try {
@@ -160,10 +83,6 @@ export async function decryptWrappedKeys(privateKey: CryptoKey, encryptedKey: st
         console.error("Decryption failed:", err);
         return "";
     }
-}
-
-export async function decryptRSA(RSAPrivateKey: CryptoKey, data: string){
-    return new TextDecoder().decode(await subtle.decrypt({ name: "RSA-OAEP" }, RSAPrivateKey, fromBase64(data)));
 }
 
 
@@ -197,4 +116,86 @@ export function hexToBuffer(hex: string): ArrayBuffer {
   }
 
   return buffer.buffer;
+}
+
+
+
+
+
+export interface DeviceKeys {
+    sign: { publicKey: string; privateKey: string; CryptoPrivateKey: CryptoKey };
+    encrypt: { publicKey: string; privateKey: string; CryptoPrivateKey: CryptoKey };
+}
+
+export async function getDeviceKeys(): Promise<DeviceKeys> {
+    const db = new LocalDB('ZTA-Example', 2);
+
+    // Try to get existing keys
+    const existingKey: any = await db.getItem('authKeys', 'myDevice');
+
+    let signKey: DeviceKeys['sign'];
+    let encryptKey: DeviceKeys['encrypt'];
+
+    // --- Signing key ---
+    if (existingKey?.sign) {
+        const privateKey = await crypto.subtle.importKey(
+            'pkcs8',
+            hexToBuffer(existingKey.sign.privateKey),
+            { name: "RSA-PSS",
+              hash: { name:"SHA-256" }
+             },
+            true,
+            ['sign']
+        );
+        signKey = {
+            publicKey: existingKey.sign.publicKey,
+            privateKey: existingKey.sign.privateKey,
+            CryptoPrivateKey: privateKey
+        };
+    } else {
+        const signingKeys = await generateSigningKeyPair();
+        const rawPrivateKey = await crypto.subtle.exportKey("pkcs8", signingKeys.privateKey);
+        const rawPublicKey = await crypto.subtle.exportKey("spki", signingKeys.publicKey);
+
+        signKey = {
+            privateKey: bufferToHex(rawPrivateKey),
+            publicKey: bufferToHex(rawPublicKey),
+            CryptoPrivateKey: signingKeys.privateKey
+        };
+    }
+
+    // --- Encryption key ---
+    if (existingKey?.encrypt) {
+        const privateKey = await crypto.subtle.importKey(
+            'pkcs8',
+            hexToBuffer(existingKey.encrypt.privateKey),
+            { name: "RSA-OAEP",
+              hash: { name:"SHA-256" }
+             },
+            true,
+            ['decrypt']
+        );
+        encryptKey = {
+            publicKey: existingKey.encrypt.publicKey,
+            privateKey: existingKey.encrypt.privateKey,
+            CryptoPrivateKey: privateKey
+        };
+    } else {
+        const encryptionKeys = await generateEncryptionKeyPair();
+        const rawPrivateKey = await crypto.subtle.exportKey("pkcs8", encryptionKeys.privateKey);
+        const rawPublicKey = await crypto.subtle.exportKey("spki", encryptionKeys.publicKey);
+
+        encryptKey = {
+            privateKey: bufferToHex(rawPrivateKey),
+            publicKey: bufferToHex(rawPublicKey),
+            CryptoPrivateKey: encryptionKeys.privateKey
+        };
+    }
+
+    // --- Save any newly generated keys back to IndexedDB ---
+    if (!existingKey || !existingKey.sign || !existingKey.encrypt) {
+        await db.addItem('authKeys', { id: 'myDevice', value: { sign: signKey, encrypt: encryptKey } });
+    }
+
+    return { sign: signKey, encrypt: encryptKey };
 }

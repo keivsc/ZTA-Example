@@ -54,3 +54,9 @@ export function fileToBlob(content) {
   const blob = new Blob([buffer]);
   return blob;
 }
+
+export function hexToString(hex) {
+  if (!hex) return '';
+  const buffer = Buffer.from(hex, 'hex');
+  return buffer.toString('utf-8');
+}

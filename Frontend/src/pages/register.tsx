@@ -1,13 +1,12 @@
 import { useState, useEffect } from "react";
-import { getTOTPSecret, Register as RegisterUser } from "../controllers/registerController";
+import { register as registerUser } from "../controllers/registerController";
 import { navigateTo } from "../utils/navigate";
 import { QRCodeSVG } from "qrcode.react";
 import { useNavigate } from "react-router-dom";
 import { LoginForm, SignUpForm } from "../components/ui";
 
 interface TOTPRegisterProps {
-  email: string;
-  privateKey: CryptoKey;
+  otpAuthUrl: string;
 }
 
 function Register() {
@@ -20,8 +19,7 @@ function Register() {
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
     const [showTOTP, setShowTOTP] = useState(false);
-    const [userEmail, setUserEmail] = useState<string | null>(null);
-    const [privateKey, setPrivateKeyArray] = useState<CryptoKey | null>(null);
+    const [OTPauthURL, setOtpAuthUrl] = useState<string | null>(null);
 
     const registerButtonClicked = async () => {
     setLoading(true);
@@ -37,13 +35,12 @@ function Register() {
       setMessage("Please enter all fields!");
       return;
     }
-
+    console.log(1);
     try {
-        const result = await RegisterUser(fullName, email, password);
+        const result = await registerUser(fullName, email, password);
 
-        if (result.code === 201 && result.privateKey) {
-            setUserEmail(email);
-            setPrivateKeyArray(result.privateKey);
+        if (result.code == 200) {
+            setOtpAuthUrl(result.data?.otpauthURL);
             setShowTOTP(true);
         } else {
             setMessage(`${result.message}`);
@@ -58,14 +55,14 @@ function Register() {
 
 
     const showPasswordButtonClicked = () => {
-    const input = document.getElementById('password') as HTMLInputElement | null;
-    if (input) {
-        input.type = input.type === 'password' ? 'text' : 'password'; // toggle
-    }
+      const input = document.getElementById('password') as HTMLInputElement | null;
+      if (input) {
+          input.type = input.type === 'password' ? 'text' : 'password'; // toggle
+      }
     };
 
-    if (showTOTP && userEmail && privateKey) {
-        return <TOTPRegister email={userEmail} privateKey={privateKey} />;
+    if (showTOTP && OTPauthURL) {
+        return <TOTPRegister otpAuthUrl={OTPauthURL} />;
     }
 
     if (message){
@@ -81,25 +78,8 @@ function Register() {
 }
 
 
-function TOTPRegister({ email, privateKey }: TOTPRegisterProps) {
-  const [otpAuthUrl, setOtpAuthUrl] = useState<string | null>(null);
+function TOTPRegister({ otpAuthUrl }: TOTPRegisterProps) {
   const navigate = useNavigate();
-
-  useEffect(() => {
-    async function fetchSecret() {
-      try {
-        const url = await getTOTPSecret(email, privateKey);
-        if (!url){
-            document.getElementById("text")!.innerHTML="An Error Occurred, Please Contact Administrator"
-        }
-        setOtpAuthUrl(url);
-      } catch (err) {
-        console.error("Failed to get TOTP secret:", err);
-      }
-    }
-
-    fetchSecret();
-  }, [email, privateKey]);
 
   const continueButton = () =>{
     
@@ -110,6 +90,10 @@ function TOTPRegister({ email, privateKey }: TOTPRegisterProps) {
     <div>
       <p id="text">Scan this QR code with your authenticator app:</p>
       {otpAuthUrl && <QRCodeSVG value={otpAuthUrl} size={200} />}
+      <p id="text">
+      Enter code manually instead: {otpAuthUrl ? otpAuthUrl.split("secret=")[1].split("&")[0] : ""}
+      </p>
+      <br></br>
       <button id="continue" onClick={continueButton}>Continue</button>
     </div>
   );

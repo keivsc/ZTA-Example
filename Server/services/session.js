@@ -1,6 +1,6 @@
 import Database from '../src/db.js';
 import Logger from '../src/logging.js';
-import {randomBytes} from 'crypto';
+import {randomBytes, createHmac} from 'crypto';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken'
 
@@ -9,26 +9,28 @@ dotenv.config({quiet:true});
 const logger = new Logger('session');
 const sesDb = new Database("session.db");
 
+
 await sesDb.run(`CREATE TABLE IF NOT EXISTS sessions (
     userId TEXT PRIMARY KEY,
     deviceId TEXT,
     nonce TEXT,
     expiresAt INTEGER,
     trustScore INTEGER,
-    token TEXT
+    token TEXT,
+    IP TEXT
 )`)
 
-const HMAC_SECRET = process.env.HMAC_SECRET;
-const JWT_SECRET = process.env.JWT_SECRET
+const HMAC_SECRET = Buffer.from(process.env.HMAC_SECRET, 'hex');
+const JWT_SECRET = Buffer.from(process.env.JWT_SECRET, 'hex');
 
-export async function generateToken(userId, deviceId) {
-  const nonce = crypto.randomBytes(16).toString('hex');
+export async function generateToken(userId, deviceId, ip) {
+  const nonce = randomBytes(16).toString('hex');
 
   // Payload object
   const payloadObj = { userId, deviceId, nonce };
 
   // Deterministic HMAC
-  const hmac = crypto.createHmac('sha256', HMAC_SECRET)
+  const hmac = createHmac('sha256', HMAC_SECRET)
                      .update(JSON.stringify(payloadObj))
                      .digest('hex');
 
@@ -43,21 +45,48 @@ export async function generateToken(userId, deviceId) {
   const expiresAt = Date.now() + 1000 * 60 * 60;
 
   await sesDb.run(
-    `INSERT INTO sessions(userId, deviceId, nonce, expiresAt, trustScore, token)
-     VALUES(?, ?, ?, ?, ?, ?)`,
-    [userId, deviceId, nonce, expiresAt, 100, sessionToken]
+    `INSERT INTO sessions(userId, deviceId, nonce, expiresAt, trustScore, token, IP)
+     VALUES(?, ?, ?, ?, ?, ?, ?)`,
+    [userId, deviceId, nonce, expiresAt, 100, sessionToken, ip]
   );
 
   return sessionToken;
 }
 
 
-export async function getToken(userId, deviceId){
-    return (await sesDb.get(
-        `SELECT token FROM sessions WHERE userId = ? AND deviceId = ?`,
+export async function getToken(userId, deviceId, deviceIp) {
+    const session = await sesDb.get(
+        `SELECT token, IP, trustScore FROM sessions WHERE userId = ? AND deviceId = ?`,
         [userId, deviceId]
-    )).token;
+    );
+
+    if (!session || !session.token) {
+        return null;
+    }
+
+    let trustScore = session.trustScore;
+
+    if (session.IP !== deviceIp) {
+        // Reduce trustScore if IP mismatch
+        trustScore = Math.max(0, trustScore - 10); // reduce by 10
+        await sesDb.run(
+            `UPDATE sessions SET trustScore = ?, IP = ? WHERE userId = ? AND deviceId = ?`,
+            [trustScore, deviceIp, userId, deviceId]
+        );
+    }
+
+    // Reject if trustScore too low
+    if (trustScore < 80) {
+        await sesDb.run(
+            `DELETE FROM sessions WHERE userId = ? AND deviceId = ?`,
+            [userId, deviceId]
+        )
+        return null;
+    }
+
+    return session.token;
 }
+
 
 
 export async function verifyToken(token, deviceId){
@@ -74,17 +103,16 @@ export async function verifyToken(token, deviceId){
             throw new Error();
         }
         const decoded = jwt.verify(token, JWT_SECRET);
-        const expectedHmac = crypto.createHmac('sha256', HMAC_SECRET)
+        const expectedHmac = createHmac('sha256', HMAC_SECRET)
                                 .update(JSON.stringify(decoded.payload))
                                 .digest('hex');
         if (decoded.hmac !== expectedHmac) throw new Error();
         if (decoded.payload.userId !== tokenCheck.userId) throw new Error();
+        return decoded.payload.userId;
     } catch (_) {
         await sesDb.run(`DELETE FROM sessions WHERE token = ?`, [token]);
-        return false;
+        return null;
     }
-
-    return decoded.payload.userId;
 
 }
 

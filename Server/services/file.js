@@ -1,5 +1,5 @@
 import Database from "../src/db.js";
-import { fileToBlob, getFileType } from "../src/utils.js";
+import { fileToBlob, getFileType, hexToString } from "../src/utils.js";
 import {randomUUID} from 'crypto';
 
 const fileDb = new Database('files.db');
@@ -8,7 +8,7 @@ await fileDb.run(
   `CREATE TABLE IF NOT EXISTS files(
     fileId TEXT PRIMARY KEY,
     type TEXT,
-    fileName TEXT,
+    filename TEXT,
     size INTEGER,
     content TEXT,
     ownerId TEXT,
@@ -26,11 +26,14 @@ await fileDb.run(
   )`
 )
 
+
+
 export async function getFile(fileId, userId) {
-  const row = await fileDb.get(`
+  const row = await fileDb.get(
+    `
     SELECT 
       f.fileId,
-      f.name,
+      f.filename,
       f.size,
       f.type,
       f.ownerId,
@@ -42,31 +45,37 @@ export async function getFile(fileId, userId) {
     FROM files f
     LEFT JOIN fileAccess fa ON f.fileId = fa.fileId AND fa.userId = ?
     WHERE f.fileId = ?
-  `, [userId, userId, fileId]);
+  `,
+    [userId, userId, fileId]
+  )
 
-  if (!row) return { error: "File does not exist." };
+  if (!row) return { error: "File does not exist." }
 
-  if (!row.canRead && row.ownerId !== userId){
-    return {};
+  if (!row.canRead && row.ownerId !== userId) {
+    return {}
   }
+
+  const isOwner = row.ownerId === userId
+
+  const contentString = row.content ? hexToString(row.content) : ''
 
   return {
     fileId: row.fileId,
-    name: row.name,
+    filename: row.filename,
     size: row.size,
     type: row.type,
-    content: row.content,
-    ownerId:row.ownerId,
-    createdAt:row.createdAt,
-    lastModified:row.lastModified,
-    canRead: !!row.canRead,
-    canWrite: !!row.canWrite
-  };
+    content: contentString,
+    ownerId: row.ownerId,
+    createdAt: row.createdAt,
+    lastModified: row.lastModified,
+    canRead: isOwner ? true : !!row.canRead,
+    canWrite: isOwner ? true : !!row.canWrite
+  }
 }
 
-export async function createFile(fileName, userId, users){
+export async function createFile(filename, userId, users){
 
-  const fileType = getFileType(fileName);
+  const fileType = getFileType(filename);
   const {fileCount} = await fileDb.get(
     `SELECT COUNT(*) as fileCount from files WHERE ownerId = ?`,
     [userId]
@@ -76,9 +85,9 @@ export async function createFile(fileName, userId, users){
   }
   const fileId = randomUUID()
   await fileDb.run(
-    `INSERT INTO files(fileId, fileName, type, size, ownerId, createdAt, lastModified)
-    VALUES(?, ?, ?, ?, ?, ?, ?)`,
-    [fileId, fileName, fileType, 0, userId, Date.now(), Date.now()]
+    `INSERT INTO files(fileId, filename, type, size, content, ownerId, createdAt, lastModified)
+    VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    [fileId, filename, fileType, 0, "", userId, Date.now(), Date.now()]
   );
 
   await updatePermissions(fileId, users);
@@ -97,7 +106,7 @@ export async function updateFile(fileId, userId, content){
     FROM files f
     LEFT JOIN fileAccess fa ON f.fileId = fa.fileId AND fa.userId = ?
     WHERE f.fileId = ?`,
-    [userId, fileId]
+    [userId, userId, fileId]
   );
 
   if (!fileAccess){
@@ -106,14 +115,18 @@ export async function updateFile(fileId, userId, content){
 
   try{
     const contentBlob = fileToBlob(content);
+    const arrayBuffer = await contentBlob.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const contentHex = buffer.toString('hex');
+    await fileDb.run(
+      `UPDATE files SET content = ? WHERE fileId = ?`,
+      [contentHex, fileId]
+    )
+  return {success:true, fileId};
   }catch(err){
     return {success:false, error:err.message}
   }
-  await fileDb.run(
-    `UPDATE SET content = ? WHERE fileId = ?`,
-    [contentBlob, fileId]
-  )
-  return {success:true, fileId};
+
 }
 
 export async function deleteFile(fileId, userId){
@@ -184,4 +197,36 @@ export async function updatePermissions(fileId, ownerUserId, users) {
 
     return { success: true, users };
 }
+
+export async function getAllFiles(userId) {
+    const rows = await fileDb.getAll(
+        `
+        SELECT 
+            f.fileId,
+            f.filename AS name,
+            f.size,
+            CASE 
+                WHEN f.ownerId = ? THEN 1
+                ELSE fa.canRead
+            END AS canRead,
+            CASE 
+                WHEN f.ownerId = ? THEN 1
+                ELSE fa.canWrite
+            END AS canWrite
+        FROM files f
+        LEFT JOIN fileAccess fa ON f.fileId = fa.fileId AND fa.userId = ?
+        WHERE f.ownerId = ? OR fa.canRead = 1
+        `,
+        [userId, userId, userId, userId]
+    );
+
+    return rows.map(row => ({
+        fileId: row.fileId,
+        filename: row.name,
+        size: row.size,
+        canRead: !!row.canRead,
+        canWrite: !!row.canWrite
+    }));
+}
+
 
